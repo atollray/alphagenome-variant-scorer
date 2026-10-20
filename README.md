@@ -1,6 +1,7 @@
 # alphagenome-variant-scorer
 
 AlphaGenomeを利用してSNV・indel・単純DEL・tandem DUPのスコアを取得する、Windows/Linux向けCLIです。
+取得対象はRNA_SEQスコアです。Predictionでは `GeneMaskLFCScorer` を使用します。
 
 準備結果と進捗を実行単位のSQLiteへ保存し、スコア応答は解析間で共有します。保存済みスコアの集計・TSV/JSON出力に対応しています。
 `run/resume` は未取得分のAPIアクセスを行います。他のコマンドはAPIキー不要・通信なしで動作します。
@@ -33,6 +34,8 @@ python3.12 -m venv .venv
 
 利用者が保有する、非圧縮のGRCh38/hg38 FASTAを指定します。
 参照配列は同梱・自動ダウンロードしません。
+ローカルFASTAはREF照合、indelの正規化、DEL/tandem DUPの配列構築に使用します。
+FASTAを指定してもAlphaGenome API側の参照ゲノムは変更されません。
 
 ```bash
 alphagenome-variant-scorer config set reference.fasta "/data/reference/hg38.fa"
@@ -40,8 +43,7 @@ alphagenome-variant-scorer config show
 ```
 
 Windowsでは例えば `"D:/reference/hg38.fa"` と指定できます。
-設定時にパスを絶対化し、ファイルの存在・読取可否・先頭ヘッダーを確認します。
-設定するだけでは索引作成や全ゲノムのハッシュ計算は行いません。
+設定は保存され、次回以降も使用されます。索引の確認・作成は次節で行います。
 
 保存先:
 
@@ -59,7 +61,6 @@ alphagenome-variant-scorer --config /path/to/settings.toml config set reference.
 手編集したconfig内の相対パスは、configの親ディレクトリを基準に解決します。
 設定例は [examples/config.example.toml](examples/config.example.toml) を参照してください。
 `config set` は他の対応済み設定値を保持しますが、TOMLのコメント・書式は保持しません。
-APIキーもこの非公開configの `[auth]` セクションへ保存します。`config show` ではキーを伏せます。
 
 ## 参照配列を確認する
 
@@ -81,8 +82,7 @@ alphagenome-variant-scorer reference check --create-index
 ```
 
 既存索引は上書きしません。古い・不正な索引がある場合は、新しい索引パスを指定してください。
-索引作成は排他制御し、一時ファイルからハードリンクで公開するため、索引保存先はハードリンク対応のローカルファイルシステムを使用してください。
-読み出し時にFASTAを変更することはありません。
+索引保存先はハードリンク対応のローカルファイルシステムを使用してください。
 
 一時的なFASTA変更は次のように指定できます。configは変更されず、以前のFASTA用索引も引き継ぎません。
 
@@ -93,17 +93,11 @@ alphagenome-variant-scorer reference check --reference-fasta /data/other/referen
 保存するFASTAを `config set reference.fasta` で変更した場合は、以前の `reference.index` 設定を解除します。
 以前のFASTAや索引ファイル自体は保持します。
 
-全ファイルのSHA-256が必要な場合:
-
-```bash
-alphagenome-variant-scorer reference check --sha256
-```
+FASTA全体のSHA-256も確認する場合は `reference check --sha256` を使用します。
 
 `reference check` は索引構造と各contigの先頭・末尾の部分読出しを確認します。
 全塩基の妥当性、GRCh38であること、API側参照との完全一致を検証した結果ではありません。
-`.fai` のタイムスタンプだけでは、別ファイル由来の索引や属性不変の書換えを完全には検出できません。
 参照と索引を対応づけて管理してください。
-出力はJSONで、エラーはstderr、終了コードは成功0・入力/設定/ファイルエラー2・中断130です。
 
 ## TSVを準備する
 
@@ -146,24 +140,13 @@ REF不一致・不正座標等は `invalid`、未対応形式・構造未指定�
 - `run.private.sqlite`: 元行、行別状態、重複除去したジョブと準備済み要求
 - `manifest.private.json`: 入力・FASTA・索引のハッシュ、使用版、構造仮定、条件と件数
 
-入力とFASTAをストリーム処理し、全ジョブをメモリへ展開しません。
 prepareごとにFASTA全体のSHA-256を計算します。
-既存の実行フォルダは上書きしません。途中で処理全体が失敗した場合はその記録を残すため、
-修正後のprepareには新しいフォルダを指定してください。
-`status` は実行DBを読み取り専用で開き、config・FASTA・APIキーを読みません。
-
-## FASTAの役割
-
-ローカルFASTAはREF照合、indelの正規化、DEL/tandem DUPの配列構築に使用します。
-FASTAパスの指定でAlphaGenome API側の参照ゲノムが切り替わるわけではありません。
-APIへは必要な座標・REF/ALT等を渡します。
-解析をまたぐスコアキャッシュを再利用します。
-実行ごとのSQLiteは入力・進捗を管理し、スコアは解析間で共有する共通キャッシュへ保存します。
-取得時は共通キャッシュを照合し、未取得分だけAPIへ問い合わせる構成です。
+既存の実行フォルダは上書きしません。prepareに失敗した場合も、修正後は新しいフォルダを指定してください。
 
 ## 共通キャッシュ
 
-新環境では、まだ存在しない専用ディレクトリを指定して空のキャッシュを作成します。
+取得済みスコアを解析間で共有し、同じ要求のAPI再送を避けます。
+まだ存在しない専用ディレクトリを指定して初期化してください。
 
 ```bash
 alphagenome-variant-scorer config set cache.directory /path/to/shared-cache
@@ -171,16 +154,14 @@ alphagenome-variant-scorer cache init
 alphagenome-variant-scorer cache status
 ```
 
-Windowsでも書き込み可能な専用パスを指定できます。
 `cache init/status --cache-dir DIR` で設定を使わず指定することもできます。
-これらの操作はFASTA・APIキーを必要とせず、APIを呼び出しません。
 初期化済みのキャッシュに対するinitは状態を確認し、内容をリセットしません。
 同一ホストのローカルディスクを使用してください。ネットワーク共有での運用は対象外です。
 
 ## 取得と再開
 
 prepare済みの実行フォルダと初期化済みの共通キャッシュを使用します。
-APIキーは非公開のconfig.tomlにまとめます。認証方法はこの1つだけです。
+APIキーは非公開のconfig.tomlの `[auth]` に設定します。
 `config show` に表示されるconfig_fileを開き、次を追加してください（既にauthがあればその項目を編集）。
 Windowsのパッケージ版アプリでは設定フォルダが転送される場合があるため、表示された実体のパスを使用してください。
 
@@ -189,9 +170,8 @@ Windowsのパッケージ版アプリでは設定フォルダが転送される�
 api_key = "ここにAPIキーを記入"
 ```
 
-キーは利用者が直接ファイルへ記入します。`config set` の引数にキーを渡す方式は用意しません。
-環境変数・envファイル・キー専用ファイルは読みません。キーを実行DB・キャッシュへ転記せず、
-`config show` でも値を表示しません。キー入りconfigはGitへ追加しないでください。
+環境変数・envファイルからのキー読込みには対応しません。`config show` ではキーを伏せます。
+キー入りconfigはGitへ追加しないでください。
 configは既定でリポジトリ外に保存します。Linuxでは所有者のみ読み書きできるよう `chmod 600` を設定してください。
 
 ```bash
@@ -209,18 +189,13 @@ alphagenome-variant-scorer resume --run-dir /path/to/run
 一時的なタイムアウト・接続障害のみ再試行します。認証・クォータ等の失敗は停止し、原因解消後にresumeします。
 Atlas未収載（not_found）や要求したscorerが返らない場合（not_returned）は行の取得状態として保存し、
 他のジョブを続けます。同じ実行のresumeでは再送しません。これらの負の結果は共通キャッシュへ保存せず、別解析では再照会します。
-送信間隔はAtlas/Predictionと再試行にも共通です。キャッシュ利用時は送信待機をしません。
-別実行間の同一要求はロックで共有します。送信間隔は実行ごとに管理されるため、複数実行の同時起動では合計の送信頻度に注意してください。
-認証・クォータ等の異常やCtrl+Cでは新規送信を止め、通信中の応答を保存してから終了します。
-通信中のRPCが完了またはタイムアウトするまで待つ場合があります。他の解析が持つキャッシュロックの待機は中止できます。
-
-Ctrl+Cまたは上限到達で中断した場合も、保存済み応答を再利用して再開します。
+送信間隔はAtlas/Predictionと再試行に共通で、キャッシュ利用には適用しません。
+複数実行の同時起動では、実行ごとに管理される送信頻度の合計に注意してください。
+異常やCtrl+Cでは新規送信を止め、通信中の応答を保存して終了します。
+通信の完了またはタイムアウトを待つ場合があります。中断後は保存済み応答を再利用して再開します。
 runとresumeは同じ再開可能な処理です。再開には最初と同じ共通キャッシュ保存先を使用します。
-再開時にworkers・送信間隔を変更できます。直近の実行条件はmanifestとstatusのruntimeに記録します。
-FASTAは再開時に読みません。
+再開時にworkers・送信間隔を変更できます。FASTAは再開時に不要です。
 `status` のfetch_attemptsはアダプターの試行数です。接続前失敗も含み、サーバーが受信したRPC数とは異なります。
-取得完了はスコアが全遺伝子で算出されたことを意味しません。NaN/Infinityは数値配列中に保持し、
-gene/trackのラベルと全返却layerを保存します。
 
 ## 保存結果の出力
 
@@ -231,9 +206,10 @@ alphagenome-variant-scorer export --run-dir /path/to/run --output results.json -
 alphagenome-variant-scorer export --run-dir /path/to/run --output scores.tsv --format scores-tsv
 ```
 
-exportはconfig・FASTA・APIキーを読まず、APIを呼びません。閾値を変える場合も保存結果から再集計します。
+exportは保存結果から再集計するため、閾値を変えてもAPIへの再送は不要です。
 TSVには元列に `AGVS_` 列を追加し、JSONには元入力値・行番号・取得状態・gene別要約を保存します。
 不正行・重複行も順番を保ちます。列数が不正な入力行の全値は `AGVS_original_values_json` で保持します。
+TSVは元の文字列を保持します。第三者由来のデータをExcel等で開く場合は、数式として解釈されないよう文字列として取り込んでください。
 `AGVS_` の出力列名と元列名が衝突する場合はJSONを使ってください。
 詳細TSVは取得済み応答のrawセルのみを出し、gene/trackメタデータと非有限値の種類を付けます。
 quantile等のlayerはキャッシュに保持しますが、exportの判定・詳細値はrawのみです。
@@ -255,11 +231,10 @@ P01/E02は本プログラムの評価状態で、APIの通信エラーではあ�
 一部trackのみ非有限の遺伝子も全体を除外しますが、元の有限値を含む全raw値はキャッシュと詳細TSVに残します。
 未算出の原因はこの判定では特定できません。completeも返却集合内での完全性を意味します。
 
-未完了の解析は `--allow-partial` を明示した場合だけ出力します。読み取り専用のDBスナップショットを使用し、
-未取得・失敗行も要約TSV/JSONに含めます。各出力に `<出力名>.manifest.json` を付け、
+未完了の解析は `--allow-partial` を指定すると出力でき、未取得・失敗行も要約TSV/JSONに含めます。各出力に `<出力名>.manifest.json` を付け、
 閾値・集計方式の版・入力/要求ハッシュ・出力SHA-256・途中結果かどうかを記録します。
 新しい出力名を使ってください。既存出力やmanifestを上書きしません。
-manifestを先に確定し、データファイルの出現を出力完了の印にします。
+出力先はハードリンクに対応したローカルファイルシステムを使用してください。
 
 ## 開発用の確認
 
@@ -269,8 +244,7 @@ python tools/check_public_files.py
 python tools/check_public_files.py --staged
 ```
 
-テストは一時ディレクトリと明示された短い合成FASTAのみを使用します。
-実データ、実hg38全体、既存キャッシュ、APIキーを読みません。
+テストは合成データを使用し、実データ・既存キャッシュ・APIキーは不要です。
 
 ## ライセンス
 

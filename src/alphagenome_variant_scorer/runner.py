@@ -112,9 +112,13 @@ def _execute_jobs(db, cache, fetch, save, *, max_jobs, max_attempts,
         # One start-time gate for all workers, including retries and both APIs.
         with gate:
             if last_call is not None:
-                delay = max(0, min_interval - (time.monotonic() - last_call))
-                if stop.wait(delay):
-                    raise CancelledError()
+                # Python 3.12 on Windows uses a coarse clock for monotonic().
+                # Use the high-resolution monotonic counter and recheck after
+                # waiting so timer rounding cannot shorten the interval.
+                deadline = last_call + min_interval
+                while (delay := deadline - time.perf_counter()) > 0:
+                    if stop.wait(delay):
+                        raise CancelledError()
             if stop.is_set():
                 raise CancelledError()
             acknowledged = Event()
@@ -125,7 +129,7 @@ def _execute_jobs(db, cache, fetch, save, *, max_jobs, max_attempts,
                     raise CancelledError()
             if stop.is_set():
                 raise CancelledError()
-            last_call = time.monotonic()
+            last_call = time.perf_counter()
 
     def work(job_id, request):
         def fetch_with_retries():

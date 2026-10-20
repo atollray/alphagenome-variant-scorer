@@ -84,7 +84,7 @@ class ParallelTest(unittest.TestCase):
         def fetch(request):
             pos = request["variant"]["pos"]
             with lock:
-                starts.append(time.monotonic())
+                starts.append(time.perf_counter())
                 counts[pos] = counts.get(pos, 0) + 1
                 attempt = counts[pos]
             if attempt == 1:
@@ -94,7 +94,8 @@ class ParallelTest(unittest.TestCase):
         result = self.execute(path, fetch, workers=4, max_jobs=4, min_interval=0.025)
         self.assertEqual(result["scoring"]["fetch_attempts"], 8)
         self.assertEqual(len(starts), 8)
-        self.assertTrue(all(b-a >= 0.020 for a, b in zip(starts, starts[1:])))
+        gaps = [b-a for a, b in zip(starts, starts[1:])]
+        self.assertTrue(all(gap >= 0.024 for gap in gaps), gaps)
 
     def test_32_workers_can_finish_a_bounded_batch(self):
         self.source.write_text("#CHROM\tPOS\tREF\tALT\n" + "".join(
