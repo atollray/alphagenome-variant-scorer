@@ -1,0 +1,14 @@
+schema_version = 1
+
+[reference]
+assembly = "GRCh38"
+fasta = "/path/to/hg38.fa"
+# Optional: store the index outside a read-only FASTA directory.
+index = "/path/to/writable/hg38.fa.fai"
+
+[cache]
+directory = "/path/to/shared-cache"
+
+# Add your actual key only to your private config, never this public example.
+# [auth]
+# api_key = "YOUR_API_KEY"

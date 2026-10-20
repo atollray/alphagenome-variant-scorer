@@ -1,0 +1,2 @@
+include tests/fixtures/synthetic.fa
+include tools/check_public_files.py
