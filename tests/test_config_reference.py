@@ -40,6 +40,16 @@ class WorkspaceTest(unittest.TestCase):
             code = main(["--config", str(self.config), *args])
         return code, out.getvalue(), err.getvalue()
 
+    def configure_many_contigs(self):
+        contigs = {f"chrSynthetic{i}": 64 + i for i in range(256)}
+        self.fasta.write_text("".join(
+            f">{name}\n{('ACGT' * ((length + 3) // 4))[:length]}\n"
+            for name, length in contigs.items()
+        ), encoding="ascii")
+        save_setting(self.config, "reference.fasta", str(self.fasta))
+        save_setting(self.config, "reference.index", str(self.index))
+        return contigs
+
     def test_roundtrip_does_not_index_and_preserves_other_settings(self):
         save_setting(self.config, "reference.fasta", str(self.fasta))
         save_setting(self.config, "reference.index", str(self.index))
@@ -168,6 +178,38 @@ class WorkspaceTest(unittest.TestCase):
                     ref.sequence("chrSynthetic1", start, end)
             with self.assertRaises(UserError):
                 ref.sequence("Synthetic1", 0, 1)
+
+    def test_cli_reference_check_summary_and_all_contig_details(self):
+        contigs = self.configure_many_contigs()
+        args = ("reference", "check", "--create-index", "--sha256")
+        code, out, err = self.cli(*args)
+        self.assertEqual((code, err), (0, ""))
+        summary = json.loads(out)
+        self.assertNotIn("contigs", summary.keys())
+        self.assertEqual(summary["contig_count"], len(contigs))
+        self.assertEqual(summary["fasta"], str(self.fasta))
+        self.assertEqual(summary["index"], str(self.index))
+        self.assertEqual(summary["size_bytes"], self.fasta.stat().st_size)
+        self.assertEqual(summary["validation"], "index structure and contig endpoint reads")
+        self.assertIs(summary["assembly_verified"], False)
+        self.assertIs(summary["api_reference_match_verified"], False)
+        self.assertEqual(summary["sha256"], hashlib.sha256(self.fasta.read_bytes()).hexdigest())
+
+        code, out, err = self.cli(*args, "--show-contigs")
+        self.assertEqual((code, err), (0, ""))
+        detailed = json.loads(out)
+        self.assertEqual(detailed.pop("contigs"), contigs)
+        self.assertEqual(detailed, summary)
+
+    def test_cli_reference_check_validates_last_contig_in_both_output_modes(self):
+        self.configure_many_contigs()
+        payload = self.fasta.read_bytes()
+        self.fasta.write_bytes(payload[:-2] + b"Z\n")
+        for options in ((), ("--show-contigs",)):
+            with self.subTest(options=options):
+                code, out, err = self.cli("reference", "check", "--create-index", *options)
+                self.assertEqual((code, out), (2, ""))
+                self.assertIn("invalid bases", err)
 
     def test_stale_index_is_not_replaced(self):
         ensure_index(self.fasta, self.index, create=True)

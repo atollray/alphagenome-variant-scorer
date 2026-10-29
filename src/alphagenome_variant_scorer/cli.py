@@ -43,6 +43,8 @@ def parser() -> argparse.ArgumentParser:
     check.add_argument("--index", metavar="PATH", help="Override the index path for this check.")
     check.add_argument("--create-index", action="store_true", help="Create a missing index; never replace one.")
     check.add_argument("--sha256", action="store_true", help="Read the full FASTA to compute its SHA-256.")
+    check.add_argument("--show-contigs", action="store_true",
+                       help="Include all contig names and lengths; omitted by default.")
     prepare = commands.add_parser("prepare", help="Validate TSV and save API requests without sending them.")
     prepare.add_argument("--input", required=True, metavar="TSV")
     prepare.add_argument("--input-format", required=True, choices=["literal-tsv", "sv-tsv"])
@@ -155,6 +157,8 @@ def main(argv: list[str] | None = None) -> int:
                 result = check_reference(
                     fasta, index, create=args.create_index, hash_file=args.sha256,
                 )
+                if not args.show_contigs:
+                    result.pop("contigs", None)
                 result["setting_sources"] = sources
                 result["config_file"] = str(path)
         print(json.dumps(result, ensure_ascii=False, indent=2, allow_nan=False))
