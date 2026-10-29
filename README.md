@@ -43,6 +43,7 @@ alphagenome-variant-scorer reference check --create-index
 
 Windowsでは例えば `"D:/reference/hg38.fa"` と指定できます。設定は次回以降も使用されます。
 既存の `.fai` を使用し、なければ作成します。既存索引は上書きしません。
+contig一覧は既定では省略します。全件表示には `reference check --show-contigs` を指定してください。
 `reference check` は索引と配列の部分読出しを確認します。GRCh38やAPI側参照との一致は検証しません。
 
 ### APIキー
